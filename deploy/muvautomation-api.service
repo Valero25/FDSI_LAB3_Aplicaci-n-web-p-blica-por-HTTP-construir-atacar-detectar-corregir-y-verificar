@@ -1,0 +1,15 @@
+[Unit]
+Description=MuvAutomation Falcon Incident Lab API (Lab 3 - HTTP sin autenticacion)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/muvautomation
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/muvautomation/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+User=www-data
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target
