@@ -121,6 +121,39 @@ Cada request relevante queda registrado en `logs/actions.log` (JSON por línea: 
 UTC, acción, método, ruta, IP origen y `alert_id` cuando aplica), como complemento al
 `access.log`/`error.log` de Nginx que se usará en la Fase D (Blue Team).
 
+## Requisitos
+
+- Python 3.11+ y `pip`.
+- Para el despliegue en servidor: Ubuntu Server (paquetes `nginx`, `python3-venv`, `ufw`).
+- Sin dependencias de frontend (no hay Node/npm): el HTML de `/` lo genera FastAPI.
+
+## URL publicada
+
+**Pendiente.** El prototipo todavía no ha sido desplegado en el servidor Ubuntu del
+laboratorio; hasta ahora solo se ha verificado la ejecución en entorno local (ver
+`INFORME.md`, sección "Evidencias de ejecución local"). Esta sección se actualizará con
+la URL/IP real en cuanto se complete el despliegue (sección "Evidencias del servidor y
+Nginx" del informe).
+
+## Limitaciones de seguridad conocidas
+
+- Todo el tráfico va por **HTTP en claro**, sin TLS/HTTPS (se corrige en el Lab 4).
+- **Sin autenticación ni autorización** en ningún endpoint: cualquiera que alcance el
+  servicio puede leer y crear alertas (`POST /alerts`, `GET /alerts`).
+- **Sin validación de origen**: `POST /alerts` acepta alertas de cualquier origen como si
+  vinieran de CrowdStrike Falcon (riesgo H1 de la tabla STRIDE).
+- **Registro de acciones sin identidad**: `logs/actions.log` guarda IP y acción, pero no
+  un usuario autenticado, por lo que no evita el repudio (riesgo H3).
+- **Nginx sin hardening**: no hay `server_tokens off`, ni cabeceras de seguridad
+  (CSP, HSTS, X-Frame-Options), ni límite de tasa (rate limiting); documentado a
+  propósito en `nginx/muvautomation.conf` para corregirse en la Fase E.
+- **SQLite sin cifrado en reposo** y sin control de integridad sobre los registros
+  (riesgo H2): una modificación directa del archivo `alerts.db` no deja rastro.
+- **Sin límites de tamaño/tasa de ingestión**: un volumen alto de peticiones a
+  `POST /alerts` podría agotar recursos del proceso único de `uvicorn` (riesgo H5).
+- Estas limitaciones son **intencionales y documentadas** para el alcance del Lab 3;
+  su corrección está prevista en fases/laboratorios posteriores, no en esta entrega.
+
 ## Ejecutar en local (desarrollo/pruebas)
 
 ```bash
