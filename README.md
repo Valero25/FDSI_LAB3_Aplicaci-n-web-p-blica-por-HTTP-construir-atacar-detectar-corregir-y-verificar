@@ -4,8 +4,15 @@ Secure Product Challenge — MuvAutomation | Automatización de incidentes de Cr
 
 ## Equipo
 
-- Juan David Valero Abril
 - Ana Gabriela Fiquitiva Poveda
+- Juan David Valero Abril
+
+## Propósito del proyecto
+
+Construir y publicar, sobre HTTP, un prototipo mínimo (API + Nginx) que reciba alertas
+**ficticias** de seguridad (simulando CrowdStrike Falcon), permita consultarlas y
+registre las acciones tomadas sobre ellas — como primer paso, deliberadamente inseguro,
+antes de las fases de ataque, detección, corrección y verificación del laboratorio.
 
 ## Problemática
 
@@ -31,6 +38,12 @@ para un laboratorio posterior — SQLite es suficiente aquí y no obliga a redis
 
 **Alcance intencional:** todo se expone por HTTP, sin autenticación ni cifrado. Este
 riesgo se corrige en el Lab 4 (HTTPS + identidad + roles), no en este laboratorio.
+
+![Arquitectura implementada - protocolo, puertos y punto de logs](diagrams/arquitectura-puertos.png)
+
+Diagrama que rotula explícitamente protocolo (HTTP/1.1), puertos (80/tcp público,
+127.0.0.1:8000 interno) y el punto de generación de logs (`log_action()` en
+`app/main.py`), como complemento al DFD de la siguiente sección.
 
 ## Modelo de amenazas — DFD (Fase B)
 
@@ -72,14 +85,14 @@ una app HTTP mínima y deliberadamente insegura).
 
 ## Tabla STRIDE (Fase B)
 
-| ID | STRIDE | Elemento afectado | Hipótesis de amenaza | Validación propuesta |
-|----|--------|--------------------|------------------------|------------------------|
-| H1 | Spoofing | API Receptor de Alertas (POST /alerts) | Un origen no autorizado podría enviar alertas ficticias haciéndose pasar por CrowdStrike Falcon, ya que el endpoint no valida el origen de la petición. | Enviar un POST desde una IP/token distinto al esperado y verificar si el sistema lo acepta sin rechazo. |
-| H2 | Tampering | Alerts DB | Sin control de integridad, una alerta ya almacenada podría modificarse (severidad, estado) sin dejar rastro de quién hizo el cambio. | Modificar un registro directamente en la base de datos y revisar si existe un log que detecte el cambio. |
-| H3 | Repudiation | Registro de Acciones (audit log) | Si el registro no asocia cada acción a un analista autenticado, un usuario podría negar haber cerrado o escalado una alerta. | Registrar una acción sin autenticación fuerte y verificar si el log permite identificar de forma inequívoca al responsable. |
-| H4 | Information Disclosure | API de Consulta (GET /alerts?filtros) | La API podría exponer más campos de los necesarios (por ejemplo, detalles internos de otros equipos) a cualquier analista que consulte. | Consultar el endpoint con un usuario de bajo privilegio y revisar si devuelve campos sensibles o de otros equipos. |
-| H5 | Denial of Service | Motor de Clasificación y Enriquecimiento | Un volumen alto de alertas ficticias enviadas rápidamente podría saturar el motor de clasificación y retrasar el procesamiento de alertas reales. | Simular una ráfaga de alertas (en entorno de laboratorio) y medir el tiempo de respuesta del motor. |
-| H6 | Elevation of Privilege | Motor de Escalamiento | Un analista con permisos de solo lectura podría, por un control de autorización débil, forzar el escalamiento o cierre de una alerta sin tener el rol adecuado. | Intentar ejecutar una acción de escalamiento con una cuenta de bajo privilegio y verificar si el sistema la bloquea. |
+| ID | STRIDE | Elemento afectado | Hipótesis de amenaza | Validación propuesta | Mitigación propuesta |
+|----|--------|--------------------|------------------------|------------------------|------------------------|
+| H1 | Spoofing | API Receptor de Alertas (POST /alerts) | Un origen no autorizado podría enviar alertas ficticias haciéndose pasar por CrowdStrike Falcon, ya que el endpoint no valida el origen de la petición. | Enviar un POST desde una IP/token distinto al esperado y verificar si el sistema lo acepta sin rechazo. | Exigir un token/API-key compartido o mTLS entre el generador de alertas y la API (Lab 4). |
+| H2 | Tampering | Alerts DB | Sin control de integridad, una alerta ya almacenada podría modificarse (severidad, estado) sin dejar rastro de quién hizo el cambio. | Modificar un registro directamente en la base de datos y revisar si existe un log que detecte el cambio. | Mover a un motor con control de integridad/transacciones auditadas, o firmar/hashear cada registro. |
+| H3 | Repudiation | Registro de Acciones (audit log) | Si el registro no asocia cada acción a un analista autenticado, un usuario podría negar haber cerrado o escalado una alerta. | Registrar una acción sin autenticación fuerte y verificar si el log permite identificar de forma inequívoca al responsable. | Autenticar al Analista SOC y registrar su identidad en cada entrada del log. |
+| H4 | Information Disclosure | API de Consulta (GET /alerts?filtros) | La API podría exponer más campos de los necesarios (por ejemplo, detalles internos de otros equipos) a cualquier analista que consulte. | Consultar el endpoint con un usuario de bajo privilegio y revisar si devuelve campos sensibles o de otros equipos. | Requerir autenticación y aplicar control de acceso por rol/campo antes de responder. |
+| H5 | Denial of Service | Motor de Clasificación y Enriquecimiento | Un volumen alto de alertas ficticias enviadas rápidamente podría saturar el motor de clasificación y retrasar el procesamiento de alertas reales. | Simular una ráfaga de alertas (en entorno de laboratorio) y medir el tiempo de respuesta del motor. | Añadir `limit_req` en Nginx y límites de tamaño/tasa en la API. |
+| H6 | Elevation of Privilege | Motor de Escalamiento | Un analista con permisos de solo lectura podría, por un control de autorización débil, forzar el escalamiento o cierre de una alerta sin tener el rol adecuado. | Intentar ejecutar una acción de escalamiento con una cuenta de bajo privilegio y verificar si el sistema la bloquea. | Diseñar el control de autorización por rol desde el inicio del motor, antes de construirlo. |
 
 **Nota:** las hipótesis deben validarse en el entorno de laboratorio con datos ficticios
 únicamente, sin exponer credenciales ni información real de CrowdStrike Falcon.
@@ -96,7 +109,8 @@ se implementen.
 
 ```
 diagrams/
-└── dfd-lab3.png            # DFD del prototipo (Fase B)
+├── dfd-lab3.png              # DFD del prototipo (Fase B)
+└── arquitectura-puertos.png  # protocolo/puertos/punto de logs (complementa el DFD)
 app/
 ├── main.py                 # API FastAPI: alertas + registro de acciones
 └── requirements.txt
@@ -104,8 +118,12 @@ nginx/
 └── muvautomation.conf      # virtual host: reverse proxy :80 -> :8000
 deploy/
 └── muvautomation-api.service  # unidad systemd para el Ubuntu Server del laboratorio
+evidencias/
+├── Capturas_FDSI_LAB3.pdf     # capturas reales del despliegue en Ubuntu
+└── local-http-server/         # evidencia del comando python3 -m http.server
 logs/
 └── actions.log             # se genera en tiempo de ejecución (registro de acciones)
+INFORME.md                  # informe de la Entrega 1 (las 9 secciones exigidas)
 ```
 
 ## Endpoints
@@ -129,11 +147,12 @@ UTC, acción, método, ruta, IP origen y `alert_id` cuando aplica), como complem
 
 ## URL publicada
 
-**Pendiente.** El prototipo todavía no ha sido desplegado en el servidor Ubuntu del
-laboratorio; hasta ahora solo se ha verificado la ejecución en entorno local (ver
-`INFORME.md`, sección "Evidencias de ejecución local"). Esta sección se actualizará con
-la URL/IP real en cuanto se complete el despliegue (sección "Evidencias del servidor y
-Nginx" del informe).
+`http://192.168.61.129` — servidor `lab3-server` (Ubuntu 26.04.1 LTS, VM VMware),
+accesible solo dentro del segmento de red NAT local del laboratorio
+(`192.168.61.0/24`, restringido por `ufw`). No es una IP pública de Internet: es el
+segmento usado como adaptación al no tener asignado un CIDR oficial de laboratorio.
+Evidencia completa de la verificación en `INFORME.md`, sección "Evidencias del servidor
+y Nginx".
 
 ## Limitaciones de seguridad conocidas
 
@@ -153,6 +172,9 @@ Nginx" del informe).
   `POST /alerts` podría agotar recursos del proceso único de `uvicorn` (riesgo H5).
 - Estas limitaciones son **intencionales y documentadas** para el alcance del Lab 3;
   su corrección está prevista en fases/laboratorios posteriores, no en esta entrega.
+- **Repositorio temporalmente público**: se hizo público durante el despliegue para
+  poder ejecutar `git clone` por HTTPS sin configurar un token en el servidor. Pendiente
+  de revertir a privado (o de reemplazar por un método de clonado con credenciales).
 
 ## Ejecutar en local (desarrollo/pruebas)
 

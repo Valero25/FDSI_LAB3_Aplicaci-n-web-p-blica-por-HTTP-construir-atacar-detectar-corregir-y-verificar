@@ -11,8 +11,8 @@ corregir y verificar"
 - **Laboratorio:** Lab 3 — Aplicación web pública por HTTP
 - **Entrega:** 1 (Fase A — Construir y publicar / Fase B — Modelar antes de atacar)
 - **Integrantes:**
-  - Juan David Valero Abril
   - Ana Gabriela Fiquitiva Poveda
+  - Juan David Valero Abril
 - **Repositorio:** `FDSI_LAB3_Aplicacion-web-publica-por-HTTP-construir-atacar-detectar-corregir-y-verificar`
 - **Commit evaluado:** `a3d4681` ("lab3: fase A (API FastAPI + nginx) y fase B (DFD + STRIDE)")
 - **Fecha del informe:** 2026-09-12
@@ -59,10 +59,15 @@ activo, previo a las fases de ataque (Red Team) y detección (Blue Team).
 
 ![DFD - Automatización de incidentes CrowdStrike Falcon](diagrams/dfd-lab3.png)
 
-El diagrama completo (actores, procesos, almacenes y límite de confianza) está en
+El DFD completo (actores, procesos, almacenes y límite de confianza) está en
 `diagrams/dfd-lab3.png` y descrito en detalle en `README.md` ("Modelo de amenazas —
-DFD"). La tabla siguiente complementa el diagrama con los datos que no se rotulan en la
-imagen (protocolo, puertos y punto de logs), tal como exige esta entrega:
+DFD"). Como ese DFD se centra en el flujo de datos del negocio (alertas) y no rotula
+protocolo ni puertos, se complementa con el siguiente diagrama de arquitectura, que sí
+identifica explícitamente protocolo, puertos y el punto de generación de logs:
+
+![Arquitectura implementada - protocolo, puertos y punto de logs](diagrams/arquitectura-puertos.png)
+
+La tabla siguiente resume ambos diagramas en un solo lugar:
 
 | Elemento | Detalle |
 |---|---|
@@ -73,7 +78,7 @@ imagen (protocolo, puertos y punto de logs), tal como exige esta entrega:
 | **Puertos** | `80/tcp` público (Nginx) → `127.0.0.1:8000` interno/loopback (uvicorn, no expuesto directamente a la red) |
 | **Almacenes de datos** | `app/alerts.db` (SQLite, tabla `alerts`) · `logs/actions.log` (audit log de acciones, JSON por línea) |
 | **Límites de confianza** | Uno solo, rotulado "Backend del prototipo" en el DFD: engloba Nginx, FastAPI y SQLite; los actores externos (Falcon simulado, Analista SOC) quedan fuera |
-| **Punto de generación de logs** | Función `log_action()` en `app/main.py` (línea 130), invocada en cada endpoint; escribe a `logs/actions.log`. Nginx generará su propio `access.log`/`error.log` por defecto una vez desplegado (pendiente de captura en la sección 6) |
+| **Punto de generación de logs** | Función `log_action()` en `app/main.py` (línea 130), invocada en cada endpoint; escribe a `logs/actions.log`. Nginx genera además su propio `access.log`/`error.log` por defecto (extractos capturados en la sección 6) |
 
 ---
 
@@ -92,7 +97,12 @@ nginx/
 deploy/
 └── muvautomation-api.service  # unidad systemd para el Ubuntu Server del laboratorio
 diagrams/
-└── dfd-lab3.png                # DFD del prototipo (Fase B)
+├── dfd-lab3.png                # DFD del prototipo (Fase B)
+└── arquitectura-puertos.png    # diagrama de protocolo/puertos/log (complementa el DFD)
+evidencias/
+├── Capturas_FDSI_LAB3.pdf       # capturas reales del despliegue en Ubuntu (sección 6)
+└── local-http-server/
+    └── index.html               # evidencia del comando python3 -m http.server (sección 5)
 README.md
 INFORME.md                      # este informe
 ```
@@ -106,13 +116,15 @@ excluidos de git vía `.gitignore` (no se versiona estado ni datos generados).
 
 **Nota sobre los comandos:** el enunciado sugiere `python3 -m http.server 8080` sirviendo
 un `index.html`. Este proyecto no tiene frontend estático — el "índice" lo genera
-FastAPI en memoria — así que los comandos de evidencia se adaptaron al stack real
-(`uvicorn` sirviendo en `127.0.0.1:8000`), manteniendo el mismo propósito: repositorio
-clonado, aplicación existente y funcionando localmente, commit evaluado y código HTTP
-obtenido.
+FastAPI en memoria — así que la evidencia principal usa el stack real (`uvicorn`
+sirviendo en `127.0.0.1:8000`). Para cumplir también con el comando literal del
+enunciado, se agregó un `index.html` mínimo de evidencia en
+`evidencias/local-http-server/index.html` (aclarado en el propio archivo como
+complementario, no parte de la app en producción) y se ejecutó `http.server` sobre él:
 
-Todos los comandos siguientes se ejecutaron el **2026-09-12** sobre el working tree
-local (rama `main`, working tree limpio, sincronizado con `origin/main`).
+Los comandos de `git`/`find` se ejecutaron el **2026-09-12** sobre el working tree
+local (rama `main`, working tree limpio, sincronizado con `origin/main`); las pruebas de
+`http.server` y `uvicorn` llevan su propia fecha/hora exacta junto a cada bloque.
 
 **`git status`**
 ```
@@ -142,8 +154,42 @@ a3d4681 lab3: fase A (API FastAPI + nginx) y fase B (DFD + STRIDE)
 ./README.md
 ```
 
-**Levantar la aplicación** (equivalente local a `python3 -m http.server 8080`, adaptado
-al stack real):
+**Comando literal del enunciado** (`python3 -m http.server 8080` sobre el `index.html`
+de evidencia):
+```
+$ cd evidencias/local-http-server
+$ python -m http.server 8080
+```
+
+**Fecha/hora de la prueba (UTC):** `2026-09-13T02:41:44Z`
+
+```
+$ curl -sS -I http://localhost:8080
+HTTP/1.0 200 OK
+Server: SimpleHTTP/0.6 Python/3.11.9
+Date: Sun, 13 Sep 2026 02:41:45 GMT
+Content-type: text/html
+Content-Length: 647
+Last-Modified: Sun, 13 Sep 2026 02:41:18 GMT
+```
+→ **Código HTTP obtenido: 200 OK.**
+
+```
+$ curl -sS http://localhost:8080
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>MuvAutomation - Evidencia http.server (Lab 3)</title></head>
+<body>
+  <h1>MuvAutomation - Falcon Incident Automation (LAB)</h1>
+  <p>Página estática de evidencia para el comando <code>python3 -m http.server 8080</code>
+     exigido por el enunciado de la Entrega 1.</p>
+  ...
+</body>
+</html>
+```
+
+**Levantar la aplicación real del laboratorio** (FastAPI/uvicorn, stack efectivamente
+usado en producción):
 ```
 cd app
 .venv/Scripts/uvicorn main:app --host 127.0.0.1 --port 8000
@@ -208,54 +254,189 @@ generación de logs descrito en la sección 3):
 ```
 
 **Esto demuestra:** el repositorio está clonado y actualizado (`git status`/`git log`),
-`app/main.py` existe y contiene la aplicación (no hay `index.html` porque no aplica a
-este stack), la página/API funciona localmente (HTTP 200 en `/`, 201 en creación, 404 en
-recurso inexistente), el commit evaluado es `a3d4681`, y la fecha/hora exacta de las
-pruebas es `2026-09-12T16:03:13Z`.
+el `index.html` de evidencia existe y `http.server` lo sirve con HTTP 200
+(`evidencias/local-http-server/index.html`), la aplicación real (`app/main.py`, sin
+frontend estático) funciona localmente (HTTP 200 en `/`, 201 en creación, 404 en recurso
+inexistente), el commit evaluado es `a3d4681`, y las fechas/horas exactas de las pruebas
+son `2026-09-13T02:41:44Z` (http.server) y `2026-09-12T16:03:13Z` (uvicorn/API real).
 
 ---
 
 ## 6. Evidencias del servidor y Nginx
 
-**Estado: pendiente.** A la fecha de este informe, el prototipo **no ha sido desplegado
-todavía** en un servidor Ubuntu real del laboratorio — solo se ha verificado en entorno
-local (sección 5). Esta sección se completará con evidencia real (capturas, salidas de
-comandos, extractos de `access.log`/`error.log`) en cuanto se ejecute el despliegue.
+**Estado: completado.** El prototipo fue desplegado en un servidor Ubuntu real
+(`lab3-server`, VM VMware, red NAT local) el **2026-09-13**. A continuación la evidencia
+recolectada durante el despliegue, respaldada por las capturas de pantalla reales en
+[`evidencias/Capturas_FDSI_LAB3.pdf`](evidencias/Capturas_FDSI_LAB3.pdf):
 
-El paso a paso completo para producir esa evidencia está al final de este documento
-("Anexo — Procedimiento de despliegue en Ubuntu"), y ya está documentado también en
-`README.md` ("Despliegue en el Ubuntu Server del laboratorio"). Checklist de lo que debe
-capturarse una vez desplegado (sin incluir contraseñas, tokens ni llaves privadas):
+- **Página 1:** `hostnamectl`, `ip -br address`, `uname -a`, `date -u`, `whoami`, `pwd`,
+  `nginx -v` y `sudo nginx -t` — todos ejecutados directamente en la terminal SSH del
+  servidor `lab3-server`.
+- **Página 2:** `systemctl status nginx --no-pager` y
+  `systemctl status muvautomation-api --no-pager` (ambos servicios `active (running)`),
+  más el log en vivo de `uvicorn` mostrando peticiones reales entrantes (incluida una
+  desde `192.168.61.1`, el host Windows), y `curl -I`/`curl -i` contra `localhost`
+  mostrando `405`/`200 OK` con cabeceras de `nginx/1.28.3`.
+- **Página 3: captura real del navegador** cargando `http://192.168.61.129` y mostrando
+  la página "MuvAutomation - Falcon Incident Automation (LAB)" — evidencia visual
+  exigida por el enunciado — junto con `cat nginx/*.conf` confirmando la configuración
+  desplegada.
+- **Página 4:** `ls -la /opt/fdsi-lab3` (permisos del directorio publicado),
+  `tail -n 20` de `access.log` y `error.log`, y `sudo ufw status numbered` con las
+  reglas finales del firewall.
 
-- [ ] `hostname`, `whoami`, `pwd`
-- [ ] `nginx -v`
-- [ ] `systemctl status nginx --no-pager`
-- [ ] `sudo nginx -t`
-- [ ] `curl -I http://localhost` (código HTTP obtenido)
-- [ ] Captura del navegador accediendo a la URL/IP pública
-- [ ] URL o IP utilizada
-- [ ] Archivo de configuración de Nginx (`nginx/muvautomation.conf`, ya versionado)
-- [ ] Permisos del directorio publicado (`ls -la /opt/muvautomation`)
-- [ ] Extracto de `access.log` (sin datos sensibles)
-- [ ] Extracto de `error.log` (sin datos sensibles)
+**Host y usuario:**
+```
+$ hostname          → lab3-server
+$ whoami            → ubuntu
+$ pwd               → /opt/fdsi-lab3
+```
+
+**Línea base del host** (`hostnamectl`, `2026-09-13T01:43:28Z`):
+```
+Static hostname: lab3-server
+Operating System: Ubuntu 26.04.1 LTS
+Kernel: Linux 7.0.0-31-generic
+Architecture: x86-64
+Virtualization: vmware
+```
+`ip -br address` → `ens33 UP 192.168.61.129/24`. `uname -a` →
+`Linux lab3-server 7.0.0-31-generic ... x86_64 GNU/Linux`.
+
+**Versión e instalación de Nginx:**
+```
+$ sudo apt install -y nginx python3-venv
+Configurando nginx (1.28.3-2ubuntu1.10) ...
+$ nginx -v
+nginx version: nginx/1.28.3 (Ubuntu)
+```
+
+**Prueba de sintaxis y estado del servicio:**
+```
+$ sudo nginx -t
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+
+$ sudo systemctl status nginx --no-pager
+● nginx.service - A high performance web server and a reverse proxy server
+     Active: active (running) since Sun 2026-09-13 01:44:34 UTC
+   Main PID: 2292 (nginx)
+
+$ sudo systemctl status muvautomation-api --no-pager
+● muvautomation-api.service - MuvAutomation Falcon Incident Lab API (Lab 3 - HTTP sin autenticacion)
+     Active: active (running) since Sun 2026-09-13 01:57:20 UTC; 6s ago
+   Main PID: 2816 (uvicorn)
+```
+
+**Acceso HTTP verificado (por Nginx, puerto 80):**
+```
+$ curl -i http://localhost
+HTTP/1.1 200 OK
+Server: nginx/1.28.3 (Ubuntu)
+Content-Type: text/html; charset=utf-8
+Content-Length: 367
+```
+→ **Código HTTP obtenido: 200 OK.** (`curl -I` da 405 porque envía `HEAD` y la ruta `/`
+solo implementa `GET`, igual que en la evidencia local de la sección 5 — comportamiento
+consistente entre entorno local y servidor.)
+
+**Captura del navegador / URL utilizada:** desde el host Windows, `http://192.168.61.129`
+cargó correctamente la misma página que devuelve el `curl`. *(Red NAT local de VMware —
+no hay IP pública real de laboratorio asignada; se usó este segmento como adaptación
+equivalente, ver nota de firewall más abajo).*
+
+**Archivo de configuración de Nginx desplegado** (`/etc/nginx/sites-available/fdsi-lab3`,
+copiado sin cambios desde `nginx/muvautomation.conf`):
+```nginx
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+**Permisos del directorio publicado** (`ls -la /opt/fdsi-lab3`):
+```
+drwxr-xr-x 9 ubuntu www-data 4096 Sep 13 01:56 .
+drwxrwxr-x 7 ubuntu www-data 4096 Sep 13 01:51 .git
+drwxrwxr-x 5 ubuntu www-data 4096 Sep 13 01:52 .venv
+drwxrwxr-x 3 ubuntu www-data 4096 Sep 13 01:57 app
+drwxrwxr-x 2 ubuntu www-data 4096 Sep 13 01:57 logs
+```
+Propietario `ubuntu`, grupo `www-data` (el usuario bajo el que corre el servicio
+systemd), con permisos de grupo de lectura/ejecución (`chmod g+rX`) — el servicio puede
+leer el código sin correr como root ni como el usuario interactivo.
+
+**Extracto de `access.log`** (sin datos sensibles):
+```
+::1 - - [13/Sep/2026:01:59:51 +0000] "HEAD / HTTP/1.1" 405 0 "-" "curl/8.18.0"
+::1 - - [13/Sep/2026:02:00:07 +0000] "GET / HTTP/1.1" 200 367 "-" "curl/8.18.0"
+192.168.61.1 - - [13/Sep/2026:02:00:37 +0000] "GET / HTTP/1.1" 200 260 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ..."
+192.168.61.1 - - [13/Sep/2026:02:00:37 +0000] "GET /favicon.ico HTTP/1.1" 404 22 "http://192.168.61.129/" "Mozilla/5.0 ..."
+```
+
+**Extracto de `error.log`:**
+```
+2026/09/13 01:44:35 [notice] 2292#2292: using inherited sockets from "5;6;"
+```
+Sin errores reales registrados: el despliegue no presentó incidentes de configuración
+en Nginx.
+
+**Firewall (ufw):** limitado al segmento `192.168.61.0/24` (red NAT local de VMware,
+usada como adaptación al no tener asignado un CIDR oficial de laboratorio) más
+`OpenSSH` para administración:
+```
+Status: active
+[1] OpenSSH        ALLOW IN   Anywhere
+[2] 80/tcp         ALLOW IN   192.168.61.0/24
+[3] OpenSSH (v6)   ALLOW IN   Anywhere (v6)
+```
+
+**Observación de higiene del repositorio:** para poder ejecutar `git clone` por HTTPS
+sin configurar un token, el repositorio se puso **temporalmente en público** durante el
+despliegue. Esto no es una vulnerabilidad de la aplicación, pero es una decisión de
+manejo de acceso que debe revertirse (o reemplazarse por un despliegue con token/deploy
+key) antes de considerar el repositorio "cerrado" para el resto del curso.
+
+**Esto demuestra:** el servidor Ubuntu (`lab3-server`, Ubuntu 26.04.1 LTS) tiene Nginx
+1.28.3 activo y con sintaxis válida, el servicio `muvautomation-api` corre bajo systemd,
+la API responde HTTP 200 tanto directo (`127.0.0.1:8000`) como a través de Nginx
+(puerto 80), el acceso está limitado por `ufw` al segmento de laboratorio, y los
+permisos del directorio publicado siguen el principio de mínimo privilegio para el
+usuario de servicio.
 
 ---
 
 ## 7. Diagnóstico del fallo
 
-**No aplica todavía**: como el despliegue en servidor está pendiente (sección 6), no hay
-un fallo real que diagnosticar en esta entrega. Se deja la tabla lista para completarse
-si, al desplegar, algo no funciona como se espera:
+El despliegue de la aplicación y de Nginx en sí no presentó fallos (sección 6: `nginx -t`
+con sintaxis correcta, servicio activo, HTTP 200 en local y a través de Nginx). Sí ocurrió
+un **incidente real durante el endurecimiento del firewall (`ufw`)**, que se documenta
+aquí siguiendo el mismo formato de diagnóstico:
 
-| Prueba | Esperado | Obtenido | Evidencia | Causa probable |
+| Prueba | Esperado | Obtenido | Evidencia | Causa |
 |---|---|---|---|---|
-| `curl localhost` | HTTP 200 | _(pendiente)_ | _(pendiente)_ | _(pendiente)_ |
-| `nginx -t` | Syntax OK | _(pendiente)_ | _(pendiente)_ | _(pendiente)_ |
-| Acceso público | Página visible | _(pendiente)_ | _(pendiente)_ | _(pendiente)_ |
+| `curl localhost` (Nginx) | HTTP 200 | HTTP 200 | Sección 6, punto "Acceso HTTP verificado" | N/A — sin fallo |
+| `nginx -t` | Syntax OK | Syntax OK | Sección 6, punto "Prueba de sintaxis" | N/A — sin fallo |
+| Nueva conexión SSH tras `sudo ufw enable` | Conexión SSH exitosa | `ssh: connect to host 192.168.61.129 port 22: Connection timed out` | Salida de `ufw status numbered` sin reglas `allow` visibles justo después de habilitar `ufw` | Se ejecutó `ufw default deny incoming` + `ufw enable` **antes** de crear la regla `allow OpenSSH`; el firewall quedó denegando SSH para toda conexión nueva |
 
-Si el resultado real difiere del esperado (p. ej. `Connection refused`, error de sintaxis
-en `nginx -t`, timeout de acceso público), se documentará aquí con captura y causa raíz
-antes de la siguiente entrega.
+**Cómo se resolvió:** la sesión SSH original seguía activa (una conexión ya establecida
+no se corta al activar `ufw`), lo que permitió, sin perder acceso al servidor, ejecutar:
+```bash
+sudo ufw allow OpenSSH
+sudo ufw allow from 192.168.61.0/24 to any port 80 proto tcp
+```
+Una conexión SSH nueva desde otra terminal confirmó que quedó resuelto. **Lección para
+futuros despliegues:** siempre crear las reglas `allow` (en particular `OpenSSH`) *antes*
+de `ufw enable`, o abrir una segunda sesión de respaldo antes de tocar el firewall.
 
 ---
 
@@ -301,21 +482,27 @@ información real de CrowdStrike Falcon.
 ## 9. Conclusión
 
 La Fase A (construir y publicar una API HTTP mínima) y la Fase B (modelar amenazas antes
-de atacar) están completas a nivel de código y diseño: existe una API FastAPI funcional
-con persistencia SQLite, una configuración de Nginx como reverse proxy, un DFD con su
-límite de confianza y una tabla STRIDE que cubre las 6 categorías con al menos una
-hipótesis, evidencia y mitigación propuesta cada una. La evidencia de ejecución local
-(sección 5) confirma que el repositorio, el commit y la aplicación funcionan tal como se
-documentan. Lo que queda pendiente para cerrar esta entrega es el despliegue real en el
-servidor Ubuntu del laboratorio (sección 6) — sin el cual no se puede completar la
-evidencia de servidor/Nginx ni la URL publicada — y, en fases posteriores, la
-construcción de los componentes de clasificación/escalamiento y la corrección de las
-limitaciones de seguridad ya documentadas (autenticación, TLS, hardening de Nginx),
-que se abordarán en las Fases C a F.
+de atacar) están completas, tanto a nivel de código/diseño como de despliegue real: existe
+una API FastAPI funcional con persistencia SQLite, Nginx activo como reverse proxy en un
+servidor Ubuntu real (`lab3-server`, `192.168.61.129`), un DFD con su límite de confianza
+y una tabla STRIDE que cubre las 6 categorías con hipótesis, evidencia y mitigación
+propuesta cada una. Tanto la evidencia de ejecución local (sección 5) como la de servidor
+(sección 6) confirman que el repositorio, el commit y la aplicación funcionan de forma
+consistente en ambos entornos (mismo HTTP 200/405 esperado). El único incidente real
+detectado — el bloqueo temporal de SSH al activar `ufw` sin reglas previas (sección 7) —
+se diagnosticó y corrigió sin pérdida de acceso, y queda documentado como lección
+aprendida. Lo pendiente para las siguientes entregas es: revertir la visibilidad pública
+temporal del repositorio (o reemplazarla por un método de clonado con credenciales), y
+construir/corregir en las Fases C–F los componentes de clasificación/escalamiento y las
+limitaciones de seguridad ya documentadas (autenticación, TLS, hardening de Nginx).
 
 ---
 
 ## Anexo — Procedimiento de despliegue en Ubuntu (paso a paso)
 
-Ver la sección final de la respuesta de esta conversación / `README.md` para el
-procedimiento detallado y comentado de despliegue en el servidor Ubuntu del laboratorio.
+Ver `README.md` ("Despliegue en el Ubuntu Server del laboratorio") para el procedimiento
+genérico documentado antes del despliegue. La ejecución real, con las rutas y ajustes
+específicos del servidor `lab3-server` (`/opt/fdsi-lab3` en vez de `/opt/muvautomation`,
+ajuste de `deploy/*.service` con `sed`, permisos `www-data`, y la corrección del
+incidente de `ufw`/SSH), queda documentada en detalle en la sección 6 y 7 de este
+informe.
