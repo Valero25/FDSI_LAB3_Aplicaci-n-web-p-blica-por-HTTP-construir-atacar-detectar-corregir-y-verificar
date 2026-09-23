@@ -9,249 +9,158 @@ Secure Product Challenge — MuvAutomation | Automatización de incidentes de Cr
 
 ## Propósito del proyecto
 
-Construir y publicar, sobre HTTP, un prototipo mínimo (API + Nginx) que reciba alertas
-**ficticias** de seguridad (simulando CrowdStrike Falcon), permita consultarlas y
-registre las acciones tomadas sobre ellas — como primer paso, deliberadamente inseguro,
-antes de las fases de ataque, detección, corrección y verificación del laboratorio.
+Este proyecto es un prototipo (API + Nginx) que recibe alertas **ficticias** de seguridad (simulando CrowdStrike Falcon), las clasifica y enriquece, escala las críticas y registra las acciones que toman los analistas sobre ellas. No se usa información real ni hay integración real con CrowdStrike.
 
-## Problemática
+**Problemática:** hoy la recepción, clasificación, enriquecimiento y escalamiento de alertas de seguridad dependen de muchas actividades manuales. Eso alarga los tiempos de respuesta, dificulta correlacionar evidencias y hace que cada quien priorice los incidentes con criterios distintos.
 
-La recepción, clasificación, enriquecimiento y escalamiento de alertas de seguridad
-requiere hoy múltiples actividades manuales, lo que aumenta los tiempos de respuesta,
-dificulta la correlación de evidencias y produce criterios distintos al priorizar
-incidentes.
+## Informes
 
-Este repositorio contiene el **prototipo** del Lab 3: recibe alertas **ficticias** de
-CrowdStrike Falcon, permite consultarlas mediante una API y registra las acciones
-realizadas. No se usa información real ni se integra con CrowdStrike.
+El laboratorio se hizo en dos partes. La idea es **comparar** la versión inicial con la versión fortalecida:
 
-## Arquitectura (Fase A)
+| Parte | Informe | Contenido |
+|---|---|---|
+| **Parte 1** — arquitectura inicial | [**INFORME.md**](INFORME.md) | La versión **deliberadamente insegura**: API FastAPI + Nginx por HTTP `:80`, sin autenticación ni hardening. Incluye el DFD, el diagrama de puertos, el despliegue real en Ubuntu, el diagnóstico del incidente de `ufw`/SSH y la tabla STRIDE inicial (H1–H6). Todos los diagramas de esta parte están en ese informe. |
+| **Parte 2** — arquitectura fortalecida | [**INFORME_PARTE2.md**](INFORME_PARTE2.md) | Es una **implementación nueva** sobre la Parte 1, que sigue el hilo *Arquitectura inicial → Gap → Riesgo/Amenaza → Mejora → Arquitectura fortalecida*. Incluye HTTPS con TLS 1.3/1.2, hardening de Nginx, API key del emisor, analistas con rol, validación de entrada, Motor de Clasificación (MITRE ATT&CK + AbuseIPDB), Motor de Escalamiento, sandboxing y firewall de entrada y salida. Trae la tabla de gaps G1–G16, el STRIDE con su estado actualizado, los diagramas nuevos y las evidencias antes/después. |
+
+## Parte 1 vs Parte 2 — qué cambió y qué descubrimos
+
+### Diferencias principales
+
+| Aspecto | Parte 1 (inicial) | Parte 2 (fortalecida) | Gap |
+|---|---|---|---|
+| Protocolo | HTTP/1.1 en claro por `:80` | **HTTPS** por `:443`; `:80` solo hace `301 → https` | G1 |
+| Versión TLS | No había TLS | **TLS 1.3 + TLS 1.2**, suites ECDHE + AEAD; TLS 1.0/1.1 rechazadas | G2 |
+| HSTS | No | `max-age=31536000` | G3 |
+| SSH | `OpenSSH ALLOW Anywhere` (v4 y v6) | 22/tcp **solo desde `192.168.61.0/24`**, solo con llave, sin root | G4 |
+| IPv6 | Nginx escuchaba en `[::]:80` | Se quitó (no se usa) | G5 |
+| Documentación de la API | `/docs`, `/redoc` y `/openapi.json` públicos | Desactivados en FastAPI + 404 en Nginx | G6 |
+| Fingerprinting | `Server: nginx/1.28.3 (Ubuntu)` y `server: uvicorn` | `server_tokens off`, `--no-server-header`, cabeceras CSP/XFO/nosniff/Referrer-Policy | G7 |
+| Límites | Ninguno | `limit_req 10 r/s` (429), body de 16 KB como máximo (413), timeouts | G8 |
+| Validación de entrada | `severity` libre, sin longitudes | `Literal`, `max_length`, `pattern`, IP validada, `extra="forbid"` → 422 | G9 |
+| `POST /alerts` | Abierto a cualquiera | Exige `X-API-Key` (401 sin ella) y registra los intentos fallidos | G10 |
+| Servicio systemd | `User=www-data` sin restricciones | `NoNewPrivileges`, `ProtectSystem=strict`, solo escribe la DB y los logs | G11 |
+| Permisos y repositorio | `.git`/`.venv` en `rwxrwxr-x`; repositorio público | Sin acceso para "otros", DB y logs en 640, `/.git` bloqueado y repositorio privado | G12 |
+| Clasificación y escalamiento | Solo en el diseño; toda alerta queda en `new` | **Motor de Clasificación**: MITRE ATT&CK local + AbuseIPDB → `risk_score` 0–100. **Motor de Escalamiento**: escala solo si el score es ≥ 70 | G13 |
+| Integraciones externas | Ninguna | Solo AbuseIPDB, con controles (IPs públicas, timeout, validación, caché, cuota, segundo plano) | G14 |
+| Salida a Internet | `allow outgoing` | `deny outgoing` salvo 53, 123/udp, 80 y 443 | G15 |
+| Analistas | Anónimos: `GET /alerts` abierto y sin registro de quién actúa | Clave por analista con rol `lector` / `respondedor`; acciones con 401 / 403 / 409 y registro del `actor` | G16 |
+| Límites de confianza (DFD) | **Uno** ("Backend del prototipo") | **Cuatro zonas** (red de laboratorio, borde Nginx/TLS, aplicación en loopback y datos en disco), más Internet como tercero no confiable | — |
+
+### Lo más importante que descubrimos
+
+1. **El DFD inicial tenía un error de modelado.** El *audit log* estaba **fuera** del límite de confianza, pero vive en el mismo servidor. Además, el DFD no mostraba Nginx, el acceso de administración SSH, el protocolo ni los puertos, así que no dejaba ver por dónde entra realmente un atacante.
+2. **La superficie de ataque real era mayor que la que habíamos modelado.** La tabla STRIDE de la Parte 1 solo miraba los endpoints de negocio. Al revisar el host aparecieron SSH abierto a *Anywhere*, Nginx escuchando en IPv6, la salida a Internet sin restricción y la documentación de FastAPI publicando el mapa completo de la API. Nada de eso estaba en el modelo inicial.
+3. **Poner HTTPS no alcanza por sí solo.** Migrar a HTTPS implica también redirigir el `:80`, fijar las versiones de TLS, agregar HSTS y ajustar el firewall. Como no hay dominio público, Let's Encrypt no aplica y se usó un certificado autofirmado con SAN = IP.
+4. **La mitigación de H1 (spoofing) y la de H5 (DoS) se refuerzan entre sí.** La API key corta las alertas falsas, y el rate limit, junto con la validación estricta, limita el daño cuando alguien tiene la key o intenta adivinarla.
+5. **Cada mejora también trae amenazas nuevas.** Al integrar AbuseIPDB aparecieron un flujo de salida, una clave más y la posibilidad de respuestas manipuladas (G14). Por eso evaluamos varias APIs de threat intelligence y solo integramos dos: MITRE ATT&CK, que funciona offline, y AbuseIPDB, con controles. **No integrar lo que no se necesita también es una decisión de seguridad.**
+6. **La táctica y la técnica deben coincidir.** Con el índice de MITRE se detecta cuando la táctica declarada no corresponde a la técnica (`tactic_mismatch`), lo que sirve como señal de una alerta mal formada o manipulada.
+7. **El orden de los cambios de firewall importa.** Lo aprendimos con el incidente de `ufw` de la Parte 1: primero se crean los `allow` y después se borran las reglas amplias o se cambia la política por defecto. El procedimiento de la Parte 2 está escrito en ese orden.
+8. **Quedan riesgos para la Parte 3.** La identidad del analista es una clave estática: faltan SSO/MFA y rotación. También falta la integridad criptográfica de la DB (H2) y el filtrado de campos por rol (H4).
+
+## Arquitectura actual (Parte 2)
 
 ```
-Usuario anónimo --HTTP--> Nginx (reverse proxy, :80) --> FastAPI (uvicorn, 127.0.0.1:8000) --> SQLite
+Falcon / Analista (LAN) --HTTPS :443 (TLS 1.3/1.2) + clave--> Nginx (hardening, rate limit)
+    --HTTP loopback--> FastAPI/uvicorn 127.0.0.1:8000 (sandbox)
+        ├── Motor de Clasificación --> índice MITRE ATT&CK (local)
+        │                         └──HTTPS :443--> AbuseIPDB (solo IPs públicas)
+        ├── Motor de Escalamiento --> logs/escalations.log
+        └── SQLite (alerts, alert_actions) · logs/actions.log
+Cliente LAN --HTTP :80--> Nginx --301--> https://
+Admin LAN   --SSH :22 (llave)--> lab3-server
 ```
 
-Este es solo el primer tramo del diagrama completo del challenge
-(`Usuario anónimo → Aplicación web → REST → API pública → PostgreSQL`). En el Lab 3 la
-"Aplicación web" y la "API pública" son el mismo servicio FastAPI; PostgreSQL se deja
-para un laboratorio posterior — SQLite es suficiente aquí y no obliga a rediseñar la API.
+Los diagramas de la Parte 2 están en [INFORME_PARTE2.md §7](INFORME_PARTE2.md#7-diagramas-de-la-arquitectura-fortalecida). Los de la Parte 1 están en [INFORME.md §3](INFORME.md#3-arquitectura-implementada).
 
-**Alcance intencional:** todo se expone por HTTP, sin autenticación ni cifrado. Este
-riesgo se corrige en el Lab 4 (HTTPS + identidad + roles), no en este laboratorio.
+## Endpoints
 
-![Arquitectura implementada - protocolo, puertos y punto de logs](diagrams/arquitectura-puertos.png)
+| Método | Ruta | Descripción | Quién puede |
+|---|---|---|---|
+| GET | `/` | Página informativa del portal (LAB) | Cualquiera (HTTPS) |
+| POST | `/alerts` | Ingesta de una alerta ficticia (con `source_ip` opcional). Se clasifica y, si corresponde, se escala en segundo plano | Emisor con `X-API-Key` |
+| GET | `/alerts?severity=&status=&min_score=&limit=` | Lista de alertas con filtros, `risk_score`, clasificación y enriquecimiento | Analista (`X-Analyst-Key`, cualquier rol) |
+| GET | `/alerts/{alert_id}` | Detalle de la alerta con su historial de acciones; 404 si no existe | Analista (cualquier rol) |
+| POST | `/alerts/{alert_id}/actions` | `acknowledge`, `comment`, `escalate` o `close` | `lector`: acknowledge y comment · `respondedor`: todas |
 
-Diagrama que rotula explícitamente protocolo (HTTP/1.1), puertos (80/tcp público,
-127.0.0.1:8000 interno) y el punto de generación de logs (`log_action()` en
-`app/main.py`), como complemento al DFD de la siguiente sección.
-
-## Modelo de amenazas — DFD (Fase B)
-
-![DFD - Automatización de incidentes CrowdStrike Falcon](diagrams/dfd-lab3.png)
-
-El diagrama de flujo de datos (DFD) representa el diseño objetivo del prototipo de
-automatización de incidentes:
-
-- **CrowdStrike Falcon (simulado)** — generador externo de alertas ficticias. Envía una
-  alerta en JSON hacia la API mediante `POST /alerts`.
-- **API Receptor de Alertas (`POST /alerts`)** — recibe la alerta y la inserta cruda en
-  la base de datos.
-- **Alerts DB (alertas + estado)** — almacenamiento central; guarda cada alerta y su
-  estado (nueva, clasificada, escalada, etc.).
-- **Motor de Clasificación y Enriquecimiento** — toma las alertas de la base de datos,
-  las enriquece y actualiza su clasificación/score.
-- **Motor de Escalamiento** — prioriza las alertas ya clasificadas y, cuando corresponde
-  (severidad alta/crítica), genera una notificación de escalamiento hacia el analista.
-- **API de Consulta (`GET /alerts?filtros`)** — permite al Analista SOC consultar el
-  estado de las alertas con filtros y recibe la respuesta en JSON.
-- **Analista SOC** — actor externo que recibe notificaciones de escalamiento, consulta
-  alertas y registra las acciones que toma.
-- **Registro de Acciones (audit log)** — almacena cada acción tomada por el analista,
-  para trazabilidad (mitiga Repudiation).
-
-El diagrama marca un único **límite de confianza** ("Backend del prototipo") que engloba
-todos los componentes de procesamiento y almacenamiento; los dos actores externos
-(el generador de alertas y el Analista SOC) quedan fuera de ese límite, igual que el
-"Usuario anónimo" en el diagrama general del challenge.
-
-**Relación con lo ya implementado (Fase A):** hoy el código en `app/main.py` cubre la
-**API Receptor de Alertas** (`POST /alerts`), la **API de Consulta** (`GET /alerts` y
-`GET /alerts/{id}`), la **Alerts DB** (SQLite) y una versión inicial del **Registro de
-Acciones** (`logs/actions.log`). El **Motor de Clasificación y Enriquecimiento**, el
-**Motor de Escalamiento** y las notificaciones al Analista SOC son parte del diseño
-objetivo del DFD pero **todavía no están construidos** — quedan como trabajo pendiente
-(probablemente para una iteración posterior del challenge, ya que el Lab 3 solo exige
-una app HTTP mínima y deliberadamente insegura).
-
-## Tabla STRIDE (Fase B)
-
-| ID | STRIDE | Elemento afectado | Hipótesis de amenaza | Validación propuesta | Mitigación propuesta |
-|----|--------|--------------------|------------------------|------------------------|------------------------|
-| H1 | Spoofing | API Receptor de Alertas (POST /alerts) | Un origen no autorizado podría enviar alertas ficticias haciéndose pasar por CrowdStrike Falcon, ya que el endpoint no valida el origen de la petición. | Enviar un POST desde una IP/token distinto al esperado y verificar si el sistema lo acepta sin rechazo. | Exigir un token/API-key compartido o mTLS entre el generador de alertas y la API (Lab 4). |
-| H2 | Tampering | Alerts DB | Sin control de integridad, una alerta ya almacenada podría modificarse (severidad, estado) sin dejar rastro de quién hizo el cambio. | Modificar un registro directamente en la base de datos y revisar si existe un log que detecte el cambio. | Mover a un motor con control de integridad/transacciones auditadas, o firmar/hashear cada registro. |
-| H3 | Repudiation | Registro de Acciones (audit log) | Si el registro no asocia cada acción a un analista autenticado, un usuario podría negar haber cerrado o escalado una alerta. | Registrar una acción sin autenticación fuerte y verificar si el log permite identificar de forma inequívoca al responsable. | Autenticar al Analista SOC y registrar su identidad en cada entrada del log. |
-| H4 | Information Disclosure | API de Consulta (GET /alerts?filtros) | La API podría exponer más campos de los necesarios (por ejemplo, detalles internos de otros equipos) a cualquier analista que consulte. | Consultar el endpoint con un usuario de bajo privilegio y revisar si devuelve campos sensibles o de otros equipos. | Requerir autenticación y aplicar control de acceso por rol/campo antes de responder. |
-| H5 | Denial of Service | Motor de Clasificación y Enriquecimiento | Un volumen alto de alertas ficticias enviadas rápidamente podría saturar el motor de clasificación y retrasar el procesamiento de alertas reales. | Simular una ráfaga de alertas (en entorno de laboratorio) y medir el tiempo de respuesta del motor. | Añadir `limit_req` en Nginx y límites de tamaño/tasa en la API. |
-| H6 | Elevation of Privilege | Motor de Escalamiento | Un analista con permisos de solo lectura podría, por un control de autorización débil, forzar el escalamiento o cierre de una alerta sin tener el rol adecuado. | Intentar ejecutar una acción de escalamiento con una cuenta de bajo privilegio y verificar si el sistema la bloquea. | Diseñar el control de autorización por rol desde el inicio del motor, antes de construirlo. |
-
-**Nota:** las hipótesis deben validarse en el entorno de laboratorio con datos ficticios
-únicamente, sin exponer credenciales ni información real de CrowdStrike Falcon.
-
-Esta tabla cubre las 6 categorías STRIDE completas. De ellas, **H1** (Spoofing) y **H4**
-(Information Disclosure) son directamente verificables hoy contra el código de la Fase A,
-porque `POST /alerts` y `GET /alerts` ya existen y no tienen ningún control de
-autenticación ni de origen. **H2, H3, H5 y H6** dependen de componentes que todavía no
-están construidos (control de integridad, autenticación de analista, motores de
-clasificación/escalamiento) — quedan como riesgo aceptado/pendiente hasta que esas piezas
-se implementen.
+Cada request relevante queda registrado en `logs/actions.log`, un JSON por línea con timestamp UTC, acción, método, ruta, IP de origen, `alert_id`, **actor** (`emisor:…`, `analyst:<nombre>` o `system:motor-…`) y **resultado** (`ok`, `unauthorized`, `forbidden`, `not_found`, `conflict`). Los escalamientos se notifican en `logs/escalations.log`.
 
 ## Estructura del repositorio
 
 ```
-diagrams/
-├── dfd-lab3.png              # DFD del prototipo (Fase B)
-└── arquitectura-puertos.png  # protocolo/puertos/punto de logs (complementa el DFD)
 app/
-├── main.py                 # API FastAPI: alertas + registro de acciones
+├── main.py                        # API FastAPI: endpoints, autenticación, roles, audit log
+├── enrichment.py                  # Motor de Clasificación y Enriquecimiento (MITRE ATT&CK + AbuseIPDB)
+├── escalation.py                  # Motor de Escalamiento (umbral + notificación)
+├── data/mitre_attack_index.json   # índice local de ATT&CK v19.2 (697 técnicas)
 └── requirements.txt
+scripts/
+└── build_mitre_index.py           # regenera el índice MITRE desde el bundle STIX oficial
+tests/
+└── test_api.py                    # 24 pruebas de los controles y de los motores
 nginx/
-└── muvautomation.conf      # virtual host: reverse proxy :80 -> :8000
+└── muvautomation.conf             # :80 -> 301, :443 TLS + hardening -> 127.0.0.1:8000
 deploy/
-└── muvautomation-api.service  # unidad systemd para el Ubuntu Server del laboratorio
+├── muvautomation-api.service      # unidad systemd con sandboxing
+└── muvautomation.env.example      # plantilla de secretos (el archivo real va en /etc y no se versiona)
+diagrams/
+├── dfd-lab3.png                   # DFD de la Parte 1
+├── arquitectura-inicial.jpeg      # arquitectura de la Parte 1 (protocolo, puertos, logs)
+└── parte2/                        # diagramas de la Parte 2 (DFD y arquitectura fortalecidos)
 evidencias/
-├── Capturas_FDSI_LAB3.pdf     # capturas reales del despliegue en Ubuntu
-└── local-http-server/         # evidencia del comando python3 -m http.server
-logs/
-└── actions.log             # se genera en tiempo de ejecución (registro de acciones)
-INFORME.md                  # informe de la Entrega 1 (las 9 secciones exigidas)
+├── Capturas_FDSI_LAB3.pdf         # capturas del despliegue de la Parte 1
+└── local-http-server/             # evidencia del comando python3 -m http.server
+requirements-dev.txt               # dependencias + pytest
+INFORME.md                         # informe de la Parte 1
+INFORME_PARTE2.md                  # informe de la Parte 2
 ```
-
-## Endpoints
-
-| Método | Ruta | Descripción |
-|---|---|---|
-| GET | `/` | Landing informativo del portal (LAB) |
-| POST | `/alerts` | Ingesta de una alerta ficticia |
-| GET | `/alerts` | Lista todas las alertas (sin autenticación) |
-| GET | `/alerts/{alert_id}` | Detalle de una alerta; 404 si no existe |
-
-Cada request relevante queda registrado en `logs/actions.log` (JSON por línea: timestamp
-UTC, acción, método, ruta, IP origen y `alert_id` cuando aplica), como complemento al
-`access.log`/`error.log` de Nginx que se usará en la Fase D (Blue Team).
-
-## Requisitos
-
-- Python 3.11+ y `pip`.
-- Para el despliegue en servidor: Ubuntu Server (paquetes `nginx`, `python3-venv`, `ufw`).
-- Sin dependencias de frontend (no hay Node/npm): el HTML de `/` lo genera FastAPI.
-
-## URL publicada
-
-`http://192.168.61.129` — servidor `lab3-server` (Ubuntu 26.04.1 LTS, VM VMware),
-accesible solo dentro del segmento de red NAT local del laboratorio
-(`192.168.61.0/24`, restringido por `ufw`). No es una IP pública de Internet: es el
-segmento usado como adaptación al no tener asignado un CIDR oficial de laboratorio.
-Evidencia completa de la verificación en `INFORME.md`, sección "Evidencias del servidor
-y Nginx".
-
-## Limitaciones de seguridad conocidas
-
-- Todo el tráfico va por **HTTP en claro**, sin TLS/HTTPS (se corrige en el Lab 4).
-- **Sin autenticación ni autorización** en ningún endpoint: cualquiera que alcance el
-  servicio puede leer y crear alertas (`POST /alerts`, `GET /alerts`).
-- **Sin validación de origen**: `POST /alerts` acepta alertas de cualquier origen como si
-  vinieran de CrowdStrike Falcon (riesgo H1 de la tabla STRIDE).
-- **Registro de acciones sin identidad**: `logs/actions.log` guarda IP y acción, pero no
-  un usuario autenticado, por lo que no evita el repudio (riesgo H3).
-- **Nginx sin hardening**: no hay `server_tokens off`, ni cabeceras de seguridad
-  (CSP, HSTS, X-Frame-Options), ni límite de tasa (rate limiting); documentado a
-  propósito en `nginx/muvautomation.conf` para corregirse en la Fase E.
-- **SQLite sin cifrado en reposo** y sin control de integridad sobre los registros
-  (riesgo H2): una modificación directa del archivo `alerts.db` no deja rastro.
-- **Sin límites de tamaño/tasa de ingestión**: un volumen alto de peticiones a
-  `POST /alerts` podría agotar recursos del proceso único de `uvicorn` (riesgo H5).
-- Estas limitaciones son **intencionales y documentadas** para el alcance del Lab 3;
-  su corrección está prevista en fases/laboratorios posteriores, no en esta entrega.
-- **Repositorio temporalmente público**: se hizo público durante el despliegue para
-  poder ejecutar `git clone` por HTTPS sin configurar un token en el servidor. Pendiente
-  de revertir a privado (o de reemplazar por un método de clonado con credenciales).
 
 ## Ejecutar en local (desarrollo/pruebas)
 
+Desde la **raíz** del repositorio (`app/` es un paquete):
+
 ```bash
-cd app
 python -m venv .venv
-source .venv/bin/activate   # en Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn main:app --reload
+source .venv/bin/activate          # en Windows: .venv\Scripts\activate
+pip install -r requirements-dev.txt
+export MUV_API_KEY=clave-emisor-local-123456
+export MUV_ANALYSTS="ana:respondedor:clave-ana-local-123456;juan:lector:clave-juan-local-12345"
+# export ABUSEIPDB_API_KEY=...     # opcional
+uvicorn app.main:app --reload
+python -m pytest -q                # 24 pruebas
 ```
+
+En PowerShell, las variables se definen así: `$env:MUV_API_KEY="clave-emisor-local-123456"`.
 
 Pruebas rápidas:
 
 ```bash
-curl -i http://127.0.0.1:8000/
+curl -i http://127.0.0.1:8000/docs                                  # 404
 curl -s -X POST http://127.0.0.1:8000/alerts \
-  -H "Content-Type: application/json" \
-  -d '{"severity":"high","tactic":"Initial Access","technique":"T1078 - Valid Accounts","hostname":"WEB-LAB-01","description":"Prueba de laboratorio"}'
-curl -s http://127.0.0.1:8000/alerts
-curl -i http://127.0.0.1:8000/alerts/no-existe
+  -H "Content-Type: application/json" -H "X-API-Key: clave-emisor-local-123456" \
+  -d '{"severity":"critical","tactic":"Exfiltration","technique":"T1041 - Exfiltration Over C2 Channel","hostname":"DB-LAB-01","description":"Prueba de laboratorio"}'
+curl -i -X POST http://127.0.0.1:8000/alerts -H "Content-Type: application/json" -d '{}'   # 401
+curl -s "http://127.0.0.1:8000/alerts?min_score=70" -H "X-Analyst-Key: clave-ana-local-123456"
+curl -i http://127.0.0.1:8000/alerts                                # 401
 ```
 
-## Despliegue en el Ubuntu Server del laboratorio (Fase A del PDF)
+## Despliegue en el servidor
 
-Ejecutar en la instancia autorizada (no en esta máquina de desarrollo):
+- Parte 1 (HTTP): [INFORME.md, Anexo](INFORME.md#anexo--procedimiento-de-despliegue-en-ubuntu-paso-a-paso).
+- Parte 2 (HTTPS + hardening): [INFORME_PARTE2.md §8](INFORME_PARTE2.md#8-cambios-implementados). Explica, en un orden seguro, cómo generar el certificado, configurar los secretos, systemd, Nginx, `ufw` (entrada y salida), SSH y los permisos.
 
-```bash
-# Paso 1 - Verificar host y registrar línea base
-hostnamectl
-ip -br address
-uname -a
-date -u +%Y-%m-%dT%H:%M:%SZ
+## URL publicada
 
-# Paso 2 - Instalar Nginx y Python
-sudo apt update
-sudo apt install -y nginx python3-venv
+`https://192.168.61.129` corresponde a `lab3-server` (Ubuntu 26.04.1 LTS, VM VMware). Solo es accesible dentro de la red NAT del laboratorio (`192.168.61.0/24`, restringida por `ufw`). `http://192.168.61.129` redirige a HTTPS. El certificado es autofirmado, así que hay que confiar en él de forma explícita (por ejemplo, `curl -k`).
 
-# Copiar el repo al servidor, por ejemplo en /opt/muvautomation
-sudo mkdir -p /opt/muvautomation
-# ... copiar app/ y este README ...
-cd /opt/muvautomation
-python3 -m venv .venv
-.venv/bin/pip install -r app/requirements.txt
+## Limitaciones de seguridad pendientes
 
-# Servicio systemd para la API
-sudo cp deploy/muvautomation-api.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now muvautomation-api
-sudo systemctl status muvautomation-api --no-pager
-
-# Virtual host Nginx (reverse proxy)
-sudo cp nginx/muvautomation.conf /etc/nginx/sites-available/muvautomation
-sudo ln -s /etc/nginx/sites-available/muvautomation /etc/nginx/sites-enabled/muvautomation
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t
-sudo systemctl reload nginx
-curl -i http://127.0.0.1/
-
-# Paso 5 - Firewall limitado al segmento del laboratorio
-export LAB_CIDR=CIDR_AUTORIZADO
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow from "$LAB_CIDR" to any port 80 proto tcp
-sudo ufw allow OpenSSH
-sudo ufw enable
-sudo ufw status numbered
-```
-
-Punto de control: verificar que la URL responde, que el firewall está limitado al
-`LAB_CIDR` asignado y que todos los datos (alertas, hostnames) son ficticios antes de
-autorizar las pruebas de Red Team.
+- **La identidad es básica:** cada analista y el emisor usan una clave estática. Faltan SSO/MFA, expiración y rotación.
+- **No hay filtrado de campos por rol** en las respuestas (H4).
+- **No hay integridad criptográfica** en `alerts.db` ni en los logs (H2): los permisos y el sandbox la reducen, pero no la garantizan.
+- **El certificado es autofirmado**, y las notificaciones de escalamiento van a un archivo, no a un canal real.
 
 ## Estado del laboratorio
 
-- **Fase A (Construir y publicar):** completa — API FastAPI + Nginx documentados y
-  probados localmente.
-- **Fase B (Modelar antes de atacar):** completa — DFD (`diagrams/dfd-lab3.png`) y tabla
-  STRIDE con 6 hipótesis (H1-H6) documentados.
-- **Fases C–F** (ataque Red Team, detección Blue Team, hardening y verificación):
-  pendientes.
+- **Parte 1 — Fases A y B:** completa (ver [INFORME.md](INFORME.md)).
+- **Parte 2 — análisis de amenazas, hardening y motores:** implementada y probada con 24 pruebas automatizadas y un stack Nginx + TLS en Docker. Faltan las evidencias del servidor (ver [INFORME_PARTE2.md](INFORME_PARTE2.md)).
+- **Fases C–F** (ataque Red Team, detección Blue Team y verificación): pendientes.

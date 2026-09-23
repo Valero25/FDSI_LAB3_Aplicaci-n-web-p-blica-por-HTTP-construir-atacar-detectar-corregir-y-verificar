@@ -1,7 +1,19 @@
-# Informe — Entrega 1
+# Informe — Parte 1 (Entrega 1): arquitectura inicial
 
 Laboratorio FDSI: "Aplicación web pública por HTTP: construir, atacar, detectar,
 corregir y verificar"
+
+> Este informe documenta la **versión inicial, deliberadamente insegura** del sistema
+> (HTTP en claro, sin autenticación ni hardening). La versión fortalecida está en
+> [`INFORME_PARTE2.md`](INFORME_PARTE2.md), y la comparación entre ambas, en el
+> [`README.md`](README.md#parte-1-vs-parte-2--qué-cambió-y-qué-descubrimos).
+
+**Diagramas de la Parte 1:**
+
+| Diagrama | Archivo |
+|---|---|
+| DFD del prototipo (Fase B) | [`diagrams/dfd-lab3.png`](diagrams/dfd-lab3.png) |
+| Arquitectura inicial: protocolo, puertos y punto de logs | [`diagrams/arquitectura-inicial.jpeg`](diagrams/arquitectura-inicial.jpeg) |
 
 ---
 
@@ -59,13 +71,36 @@ activo, previo a las fases de ataque (Red Team) y detección (Blue Team).
 
 ![DFD - Automatización de incidentes CrowdStrike Falcon](diagrams/dfd-lab3.png)
 
-El DFD completo (actores, procesos, almacenes y límite de confianza) está en
-`diagrams/dfd-lab3.png` y descrito en detalle en `README.md` ("Modelo de amenazas —
-DFD"). Como ese DFD se centra en el flujo de datos del negocio (alertas) y no rotula
-protocolo ni puertos, se complementa con el siguiente diagrama de arquitectura, que sí
-identifica explícitamente protocolo, puertos y el punto de generación de logs:
+El DFD representa el diseño objetivo del prototipo de automatización de incidentes:
 
-![Arquitectura implementada - protocolo, puertos y punto de logs](diagrams/arquitectura-puertos.png)
+- **CrowdStrike Falcon (simulado)** — generador externo de alertas ficticias. Envía una
+  alerta en JSON hacia la API mediante `POST /alerts`.
+- **API Receptor de Alertas (`POST /alerts`)** — recibe la alerta y la inserta cruda en
+  la base de datos.
+- **Alerts DB (alertas + estado)** — almacenamiento central; guarda cada alerta y su
+  estado (nueva, clasificada, escalada, etc.).
+- **Motor de Clasificación y Enriquecimiento** — toma las alertas de la base de datos,
+  las enriquece y actualiza su clasificación/score.
+- **Motor de Escalamiento** — prioriza las alertas ya clasificadas y, cuando corresponde
+  (severidad alta/crítica), genera una notificación de escalamiento hacia el analista.
+- **API de Consulta (`GET /alerts?filtros`)** — permite al Analista SOC consultar el
+  estado de las alertas con filtros y recibe la respuesta en JSON.
+- **Analista SOC** — actor externo que recibe notificaciones de escalamiento, consulta
+  alertas y registra las acciones que toma.
+- **Registro de Acciones (audit log)** — almacena cada acción tomada por el analista,
+  para trazabilidad (mitiga Repudiation).
+
+El diagrama marca un único **límite de confianza** ("Backend del prototipo") que engloba
+los componentes de procesamiento; los actores externos quedan fuera. De lo anterior, en
+la Parte 1 están construidos la API Receptor, la API de Consulta, la Alerts DB (SQLite) y
+una versión inicial del Registro de Acciones (`logs/actions.log`); los motores de
+clasificación y escalamiento son diseño objetivo, todavía no implementado.
+
+Como ese DFD se centra en el flujo de datos del negocio (alertas) y no rotula protocolo ni
+puertos, se complementa con el siguiente diagrama de arquitectura, que sí identifica
+explícitamente protocolo, puertos y el punto de generación de logs:
+
+![Arquitectura implementada - protocolo, puertos y punto de logs](diagrams/arquitectura-inicial.jpeg)
 
 La tabla siguiente resume ambos diagramas en un solo lugar:
 
@@ -78,15 +113,14 @@ La tabla siguiente resume ambos diagramas en un solo lugar:
 | **Puertos** | `80/tcp` público (Nginx) → `127.0.0.1:8000` interno/loopback (uvicorn, no expuesto directamente a la red) |
 | **Almacenes de datos** | `app/alerts.db` (SQLite, tabla `alerts`) · `logs/actions.log` (audit log de acciones, JSON por línea) |
 | **Límites de confianza** | Uno solo, rotulado "Backend del prototipo" en el DFD: engloba Nginx, FastAPI y SQLite; los actores externos (Falcon simulado, Analista SOC) quedan fuera |
-| **Punto de generación de logs** | Función `log_action()` en `app/main.py` (línea 130), invocada en cada endpoint; escribe a `logs/actions.log`. Nginx genera además su propio `access.log`/`error.log` por defecto (extractos capturados en la sección 6) |
+| **Punto de generación de logs** | Función `log_action()` en `app/main.py` (línea 130 en el commit `a3d4681`), invocada en cada endpoint; escribe a `logs/actions.log`. Nginx genera además su propio `access.log`/`error.log` por defecto (extractos capturados en la sección 6) |
 
 ---
 
 ## 4. Estructura del repositorio
 
-El detalle completo (propósito, requisitos, ejecución local, procedimiento de
-despliegue, URL publicada, integrantes y limitaciones de seguridad conocidas) está en
-[`README.md`](README.md). Árbol de archivos versionados:
+Árbol de archivos versionados en la Parte 1 (commit `a3d4681`; la estructura actual,
+con los archivos de la Parte 2, está en el [`README.md`](README.md)):
 
 ```
 app/
@@ -98,7 +132,7 @@ deploy/
 └── muvautomation-api.service  # unidad systemd para el Ubuntu Server del laboratorio
 diagrams/
 ├── dfd-lab3.png                # DFD del prototipo (Fase B)
-└── arquitectura-puertos.png    # diagrama de protocolo/puertos/log (complementa el DFD)
+└── arquitectura-inicial.jpeg   # diagrama de protocolo/puertos/log (complementa el DFD)
 evidencias/
 ├── Capturas_FDSI_LAB3.pdf       # capturas reales del despliegue en Ubuntu (sección 6)
 └── local-http-server/
@@ -442,7 +476,9 @@ de `ufw enable`, o abrir una segunda sesión de respaldo antes de tocar el firew
 
 ## 8. Modelo de amenazas inicial
 
-**DFD:** ver `diagrams/dfd-lab3.png` (sección 3 de este informe y `README.md`).
+**DFD:**
+
+![DFD - Automatización de incidentes CrowdStrike Falcon](diagrams/dfd-lab3.png)
 
 **Activos:**
 - `app/alerts.db` (alertas: severidad, táctica/técnica, hostname, estado)
@@ -467,7 +503,7 @@ Nginx (sin `server_tokens off` ni cabeceras de seguridad).
 
 | ID | STRIDE | Elemento afectado | Hipótesis de amenaza | Evidencia / prueba asociada | Mitigación propuesta |
 |----|--------|--------------------|------------------------|-------------------------------|------------------------|
-| H1 | Spoofing | `POST /alerts` | Un origen no autorizado puede enviar alertas haciéndose pasar por CrowdStrike Falcon; el endpoint no valida origen ni credenciales. | **Verificable hoy**: el `POST /alerts` ejecutado en la sección 5 fue aceptado (HTTP 201) sin ninguna credencial. | Exigir un token/API-key compartido o mTLS entre el generador de alertas y la API (Lab 4). |
+| H1 | Spoofing | `POST /alerts` | Un origen no autorizado puede enviar alertas haciéndose pasar por CrowdStrike Falcon; el endpoint no valida origen ni credenciales. | **Verificable hoy**: el `POST /alerts` ejecutado en la sección 5 fue aceptado (HTTP 201) sin ninguna credencial. | Exigir un token/API-key compartido o mTLS entre el generador de alertas y la API. |
 | H2 | Tampering | `app/alerts.db` | Una alerta almacenada puede modificarse (severidad, estado) directamente en el archivo SQLite, sin dejar rastro de quién lo hizo. | Pendiente de prueba (requiere acceso al archivo en el servidor desplegado). | Mover a un motor con control de integridad/transacciones auditadas, o firmar/hashear cada registro. |
 | H3 | Repudiation | `logs/actions.log` (audit log) | El log asocia IP y acción, pero no un analista autenticado; alguien podría negar haber tomado una acción. | **Verificable hoy**: el extracto de la sección 5 muestra `client_ip` pero ningún identificador de usuario. | Autenticar al Analista SOC y registrar su identidad en cada entrada del log. |
 | H4 | Information Disclosure | `GET /alerts` | La API expone todos los campos de todas las alertas a cualquiera que la consulte, sin filtros por rol. | **Verificable hoy**: `GET /alerts` en la sección 5 devolvió las 4 alertas completas sin autenticación. | Requerir autenticación y aplicar control de acceso por rol/campo antes de responder. |
@@ -500,9 +536,50 @@ limitaciones de seguridad ya documentadas (autenticación, TLS, hardening de Ngi
 
 ## Anexo — Procedimiento de despliegue en Ubuntu (paso a paso)
 
-Ver `README.md` ("Despliegue en el Ubuntu Server del laboratorio") para el procedimiento
-genérico documentado antes del despliegue. La ejecución real, con las rutas y ajustes
-específicos del servidor `lab3-server` (`/opt/fdsi-lab3` en vez de `/opt/muvautomation`,
-ajuste de `deploy/*.service` con `sed`, permisos `www-data`, y la corrección del
-incidente de `ufw`/SSH), queda documentada en detalle en la sección 6 y 7 de este
-informe.
+Procedimiento genérico de la Parte 1, documentado antes del despliegue (HTTP :80). La
+ejecución real, con las rutas y ajustes específicos del servidor `lab3-server`
+(`/opt/fdsi-lab3` en vez de `/opt/muvautomation`, ajuste de `deploy/*.service` con `sed`,
+permisos `www-data`, y la corrección del incidente de `ufw`/SSH), queda documentada en
+detalle en las secciones 6 y 7 de este informe. El procedimiento de la Parte 2 (HTTPS y
+hardening) está en [`INFORME_PARTE2.md`](INFORME_PARTE2.md#8-cambios-implementados).
+
+```bash
+# Paso 1 - Verificar host y registrar línea base
+hostnamectl
+ip -br address
+uname -a
+date -u +%Y-%m-%dT%H:%M:%SZ
+
+# Paso 2 - Instalar Nginx y Python
+sudo apt update
+sudo apt install -y nginx python3-venv
+
+# Copiar el repo al servidor, por ejemplo en /opt/muvautomation
+sudo mkdir -p /opt/muvautomation
+cd /opt/muvautomation
+python3 -m venv .venv
+.venv/bin/pip install -r app/requirements.txt
+
+# Servicio systemd para la API
+sudo cp deploy/muvautomation-api.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now muvautomation-api
+sudo systemctl status muvautomation-api --no-pager
+
+# Virtual host Nginx (reverse proxy)
+sudo cp nginx/muvautomation.conf /etc/nginx/sites-available/muvautomation
+sudo ln -s /etc/nginx/sites-available/muvautomation /etc/nginx/sites-enabled/muvautomation
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl reload nginx
+curl -i http://127.0.0.1/
+
+# Paso 5 - Firewall limitado al segmento del laboratorio
+export LAB_CIDR=CIDR_AUTORIZADO
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow from "$LAB_CIDR" to any port 80 proto tcp
+sudo ufw allow OpenSSH
+sudo ufw enable
+sudo ufw status numbered
+```

@@ -1,15 +1,33 @@
 [Unit]
-Description=MuvAutomation Falcon Incident Lab API (Lab 3 - HTTP sin autenticacion)
+Description=MuvAutomation Falcon Incident Lab API (Lab 3 - Parte 2, detras de Nginx TLS)
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/muvautomation
+WorkingDirectory=/opt/fdsi-lab3
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/muvautomation/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+# MUV_API_KEY vive fuera del repositorio (root:www-data, 640). Ver deploy/muvautomation.env.example.
+EnvironmentFile=/etc/muvautomation.env
+ExecStart=/opt/fdsi-lab3/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1 --no-server-header
 Restart=on-failure
 User=www-data
 Group=www-data
+UMask=0027
+
+# Sandboxing: el proceso solo puede escribir la DB y los logs.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/fdsi-lab3/app /opt/fdsi-lab3/logs
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
 
 [Install]
 WantedBy=multi-user.target

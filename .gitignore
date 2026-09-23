@@ -3,3 +3,4 @@ app/__pycache__/
 app/alerts.db
 logs/
 *.pyc
+.pytest_cache/
